@@ -91,6 +91,7 @@ export default function NewInvoicePage() {
   const [step, setStep] = useState(0)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [stepChangeTimeout, setStepChangeTimeout] = useState<NodeJS.Timeout | null>(null)
   const duplicateId = searchParams.get('duplicate')
   const editId = searchParams.get('edit')
   const correctId = searchParams.get('correct')
@@ -568,10 +569,25 @@ export default function NewInvoicePage() {
   }
 
   function handleNextStep() {
-    if (validateCurrentStep()) {
+    // Allow skipping to next step without validation - with debounce to prevent conflicts
+    if (stepChangeTimeout) clearTimeout(stepChangeTimeout)
+    const timeout = setTimeout(() => {
       setStep((s) => Math.min(steps.length - 1, s + 1))
       document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' })
-    }
+      setStepChangeTimeout(null)
+    }, 100)
+    setStepChangeTimeout(timeout)
+  }
+
+  function handleStepClick(targetStep: number) {
+    // Allow jumping to any step without validation - with debounce to prevent conflicts
+    if (stepChangeTimeout) clearTimeout(stepChangeTimeout)
+    const timeout = setTimeout(() => {
+      setStep(targetStep)
+      document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' })
+      setStepChangeTimeout(null)
+    }, 100)
+    setStepChangeTimeout(timeout)
   }
 
   async function handleCreate() {
@@ -1021,7 +1037,7 @@ export default function NewInvoicePage() {
   ]
 
   return (
-    <div className="max-w-2xl mx-auto space-y-5">
+    <div className="max-w-6xl mx-auto space-y-5">
       <div>
         <h1 className="text-lg font-bold text-foreground">
           {isEditMode ? 'Upraviť faktúru' : isCorrectionMode ? 'Opravná faktúra' : isSelfBilling ? 'Samofakturácia' : 'Nová faktúra'}
@@ -1031,7 +1047,7 @@ export default function NewInvoicePage() {
         </p>
       </div>
 
-      <InvoiceWizardStepper steps={steps.map((s) => s.label)} currentStep={step} />
+      <InvoiceWizardStepper steps={steps.map((s) => s.label)} currentStep={step} onStepClick={handleStepClick} />
 
       <div>{steps[step]?.component ?? steps[0].component}</div>
 

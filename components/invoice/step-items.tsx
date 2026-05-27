@@ -1,8 +1,10 @@
 'use client'
 
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useActiveSupplier } from '@/lib/supplier-context'
 import { GlassCard } from '@/components/glass-card'
-import { Copy, Package, Plus, Trash2, Paperclip, Upload, X, FileText, ChevronDown, ChevronUp, TrendingDown, TrendingUp } from 'lucide-react'
+import { Copy, Package, Plus, Trash2, Paperclip, Upload, X, FileText, ChevronDown, ChevronUp, TrendingDown, TrendingUp, Search, Loader2, Check } from 'lucide-react'
 import type { InvoiceFormData, InvoiceItem, InvoiceAttachment } from '@/lib/schemas'
 import { ALLOWED_MIME_TYPES, MAX_ATTACHMENT_SIZE } from '@/lib/schemas'
 import {
@@ -12,6 +14,20 @@ import {
   DEFAULT_CHARGE_REASON_CODE,
 } from '@/lib/constants'
 import { toast } from 'sonner'
+
+interface LineItemTemplate {
+  id: string
+  name: string
+  description: string | null
+  quantity: number
+  unit: string
+  unit_price: number
+  vat_rate: number
+  vat_category: string
+  discount_percent: number
+  charge_percent: number
+  color_category: string
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
@@ -92,14 +108,87 @@ function deriveGlobalChargeMode(form: InvoiceFormData): AdjustmentMode {
 }
 
 export function StepItems({ formData, updateForm, totals, isVatPayer = true, isCorrectionMode = false, validationErrors, shakeFields }: Props) {
+  const supabase = createClient()
+  const { activeSupplier } = useActiveSupplier()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [templates, setTemplates] = useState<LineItemTemplate[]>([])
+  const [templatesLoading, setTemplatesLoading] = useState(false)
+  const [templateSearch, setTemplateSearch] = useState('')
   // User's explicit mode choice for each line's allowance/charge and for the
   // document-level allowance/charge. When no override is set, the mode is
   // derived from whichever of (percent, amount) is non-zero in the data.
   const [lineModes, setLineModes] = useState<Record<number, { allow?: AdjustmentMode; charge?: AdjustmentMode }>>({})
   const [docModes, setDocModes] = useState<{ allow?: AdjustmentMode; charge?: AdjustmentMode }>({})
+
+  // Load templates from database
+  useEffect(() => {
+    if (!activeSupplier) {
+      setTemplates([])
+      return
+    }
+    setTemplatesLoading(true)
+    supabase
+      .from('line_item_templates')
+      .select('*')
+      .eq('supplier_id', activeSupplier.id)
+      .order('sort_order')
+      .order('name')
+      .then(({ data }) => {
+        setTemplates((data ?? []) as LineItemTemplate[])
+        setTemplatesLoading(false)
+      })
+      .catch(() => setTemplatesLoading(false))
+  }, [activeSupplier, supabase])
+
+  function addItemFromTemplate(template: LineItemTemplate) {
+    const populatedTemplateVatCategory = (template.vat_category && template.vat_category !== '')
+      ? ((template.vat_rate === 0 && template.vat_category !== 'AE') ? 'E' : template.vat_category)
+      : (template.vat_rate > 0 ? 'S' : 'E')
+
+    const emptyIndex = formData.items.findIndex((item) =>
+      !item.description?.trim() &&
+      item.unit_price === 0 &&
+      item.quantity === 1 &&
+      (item.discount_percent || 0) === 0 &&
+      (item.charge_percent || 0) === 0 &&
+      (item.discount_amount || 0) === 0 &&
+      (item.charge_amount || 0) === 0
+    )
+
+    const newItem: InvoiceItem & { template_seq?: number; template_color_category?: string } = {
+      line_number: emptyIndex >= 0 ? emptyIndex + 1 : formData.items.length + 1,
+      description: template.description || template.name,
+      quantity: template.quantity,
+      unit: template.unit,
+      unit_price: template.unit_price,
+      vat_category: populatedTemplateVatCategory,
+      vat_rate: template.vat_rate,
+      discount_percent: template.discount_percent || 0,
+      discount_amount: 0,
+      allowance_reason_code: null,
+      charge_percent: template.charge_percent || 0,
+      charge_amount: 0,
+      charge_reason_code: null,
+      base_quantity: 1,
+      line_total: 0,
+      item_number: null,
+      buyer_item_number: null,
+      template_seq: template.seq,
+      template_color_category: template.color_category,
+    }
+
+    const items = [...formData.items]
+    if (emptyIndex >= 0) {
+      items[emptyIndex] = { ...items[emptyIndex], ...newItem, line_total: recomputeLineTotal(newItem) }
+    } else {
+      items.push({ ...newItem, line_total: recomputeLineTotal(newItem) })
+    }
+
+    updateForm({ items })
+    toast.success(`Položka "${template.name}" pridaná`)
+  }
 
   function getLineAllowanceMode(i: number, item: InvoiceItem): AdjustmentMode {
     return lineModes[i]?.allow ?? deriveLineAllowanceMode(item)
@@ -271,24 +360,29 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
   const fmt = (n: number) =>
     n.toLocaleString('sk-SK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+  // Layout: main form left, templates sidebar right on large screens
   return (
-    <div className="space-y-6">
-      <GlassCard>
-        <div className="flex items-center gap-3 mb-6">
-          <Package className="w-5 h-5 text-primary" />
-          <h2 className="font-semibold text-foreground">Položky faktúry</h2>
-        </div>
+    <div className="grid grid-cols-1 lg:grid-cols-[3fr_1.5fr] gap-6">
+      <div className="space-y-6">
+        <GlassCard>
+          <div className="flex items-center gap-3 mb-6">
+            <Package className="w-5 h-5 text-primary" />
+            <h2 className="font-semibold text-foreground">Položky faktúry</h2>
+          </div>
 
-        <div className="space-y-4">
-          {formData.items.map((item, i) => (
-            <div
-              key={i}
-              className="glass-card rounded-xl p-4 space-y-3"
-            >
+          <div className="space-y-4">
+            {formData.items.map((item, i) => (
+              <div
+                key={i}
+                className="glass-card rounded-xl p-4 space-y-3"
+              >
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Položka {i + 1}
-                </span>
+                <div className="flex items-center gap-3">
+                  <div className={`w-3.5 h-3.5 rounded-full ${((formData.items[i] as any).template_color_category) || 'bg-slate-500'}`} />
+                  <span className="text-sm font-medium text-muted-foreground">
+                    {(formData.items[i] as any).template_seq ? `${(formData.items[i] as any).template_seq}` : `Položka ${i + 1}`}
+                  </span>
+                </div>
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => duplicateItem(i)}
@@ -309,19 +403,32 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Popis *</label>
-                <input
-                  id={`item_desc_${i}`}
-                  type="text"
-                  value={item.description}
-                  onChange={(e) => updateItem(i, { description: e.target.value })}
-                  className={`glass-input w-full px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_desc_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
-                  placeholder="Popis položky"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-[120px_1fr] gap-4">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Poradové číslo *</label>
+                  <input
+                    id={`item_seq_${i}`}
+                    type="number"
+                    value={item.line_number}
+                    onChange={(e) => updateItem(i, { line_number: parseInt(e.target.value, 10) || 0 })}
+                    className={`glass-input w-full min-w-0 px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_seq_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
+                    min="1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Názov *</label>
+                  <input
+                    id={`item_desc_${i}`}
+                    type="text"
+                    value={item.description}
+                    onChange={(e) => updateItem(i, { description: e.target.value })}
+                    className={`glass-input w-full px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_desc_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
+                    placeholder="Názov položky"
+                  />
+                </div>
               </div>
 
-              <div className={`grid grid-cols-2 ${isVatPayer ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-3`}>
+              <div className={`grid grid-cols-2 ${isVatPayer ? 'md:grid-cols-[3fr_2fr_2fr_1.8fr]' : 'md:grid-cols-[3fr_2fr_2fr]'} gap-4`}>
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Množstvo *</label>
                   <input
@@ -330,7 +437,7 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
                     value={item.quantity}
                     onChange={(e) => updateItem(i, { quantity: parseFloat(e.target.value) || 0 })}
                     onFocus={(e) => e.target.select()}
-                    className={`glass-input w-full px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_qty_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
+                    className={`glass-input w-full min-w-0 px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_qty_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
                     {...(!isCorrectionMode && { min: '0' })}
                     step="0.001"
                   />
@@ -340,7 +447,7 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
                   <select
                     value={item.unit}
                     onChange={(e) => updateItem(i, { unit: e.target.value })}
-                    className="glass-input w-full px-3 py-2 rounded-lg text-foreground text-sm"
+                    className="glass-input w-full min-w-0 px-3 py-2 rounded-lg text-foreground text-sm"
                   >
                     {unitOptions.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
@@ -355,7 +462,7 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
                     value={item.unit_price}
                     onChange={(e) => updateItem(i, { unit_price: parseFloat(e.target.value) || 0 })}
                     onFocus={(e) => e.target.select()}
-                    className={`glass-input w-full px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_price_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
+                    className={`glass-input w-full min-w-0 px-3 py-2 rounded-lg text-foreground text-sm ${validationErrors?.has(`item_price_${i}`) ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`}
                     {...(!isCorrectionMode && { min: '0' })}
                     step="0.00001"
                   />
@@ -723,7 +830,60 @@ export function StepItems({ formData, updateForm, totals, isVatPayer = true, isC
             <p className="text-xs text-amber-500 mt-2">Aspoň jedna položka s prenesením DPH (AE) — poznámka &quot;Prenesenie daňovej povinnosti&quot; bude doplnená pri uložení ak necháte pole prázdne.</p>
           )}
         </div>
-      </GlassCard>
+        </GlassCard>
+      </div>
+
+      <div className="space-y-4">
+        <GlassCard>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-foreground">Položky (šablóny)</h3>
+            <button onClick={() => window.open('/items', '_blank')} className="text-xs text-primary hover:underline">Spravovať</button>
+          </div>
+
+          <div className="mb-3">
+            <div className="relative">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Hľadaj položku..."
+                value={templateSearch}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                className="glass-input w-full pl-10 pr-4 py-2.5 rounded-xl text-foreground placeholder:text-muted-foreground"
+              />
+            </div>
+          </div>
+
+          <div className="max-h-[48vh] overflow-auto space-y-2">
+            {templatesLoading ? (
+              <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-primary" /></div>
+            ) : templates.filter(t => t.name.toLowerCase().includes(templateSearch.toLowerCase())).length === 0 ? (
+              <p className="text-sm text-muted-foreground">Žiadne šablóny</p>
+            ) : (
+              templates.filter(t => t.name.toLowerCase().includes(templateSearch.toLowerCase())).map(t => (
+                <div key={t.id} className="p-2 rounded-lg hover:bg-slate-700/40">
+                <div className="flex items-start gap-2">
+                  <div className={`w-2.5 h-2.5 rounded-full ${t.color_category} shrink-0 mt-1`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 space-y-1">
+                        <div className="font-medium text-sm text-foreground truncate">{t.name}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">
+                          {t.description || `${t.quantity} × ${t.unit} • ${t.unit_price.toFixed(2)} € • ${t.vat_rate}%`}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button onClick={() => addItemFromTemplate(t)} className="px-2 py-1 rounded-lg bg-primary text-primary-foreground text-xs whitespace-nowrap">Pridať</button>
+                        <button onClick={() => window.open(`/items?edit=${t.id}`, '_blank')} className="px-2 py-1 rounded-lg border border-border text-xs text-foreground whitespace-nowrap">Upraviť</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              ))
+            )}
+          </div>
+        </GlassCard>
+      </div>
     </div>
   )
 }

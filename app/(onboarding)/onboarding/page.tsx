@@ -73,12 +73,14 @@ export default function OnboardingPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
-        router.push('/')
+        setPhase('error')
+        setErrorMsg('Session stratená. Prosím prihláste sa znova.')
+        setTimeout(() => router.push('/auth/login'), 1500)
         return
       }
 
       // Save to company_profiles (for billing the user)
-      await supabase.from('company_profiles').upsert({
+      const { error: profileError } = await supabase.from('company_profiles').upsert({
         id: user.id,
         ico: data.ico,
         dic: data.dic,
@@ -90,8 +92,10 @@ export default function OnboardingPage() {
         country_code: data.country_code,
       })
 
+      if (profileError) throw profileError
+
       // Create first supplier and mark as Majiteľ profilu
-      await supabase.from('suppliers').insert({
+      const { error: supplierError } = await supabase.from('suppliers').insert({
         user_id: user.id,
         ico: data.ico,
         dic: data.dic,
@@ -106,11 +110,18 @@ export default function OnboardingPage() {
         ...(iban ? { iban } : {}),
       })
 
+      if (supplierError) throw supplierError
+
       setPhase('done')
       setTimeout(() => router.push('/dashboard'), 600)
-    } catch {
+    } catch (error) {
+      console.error('Onboarding save error:', error)
       setPhase('error')
-      setErrorMsg('Nepodarilo sa uložiť údaje. Skúste to znova.')
+      setErrorMsg(
+        error instanceof Error
+          ? `Chyba: ${error.message}`
+          : 'Nepodarilo sa uložiť údaje. Skúste to znova.'
+      )
     }
   }
 

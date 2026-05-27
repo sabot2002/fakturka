@@ -17,15 +17,10 @@ function getSiteUrl(headersList: Headers): string {
   }
 
   // 3. Derive from request headers 
-  const host = headersList.get('x-forwarded-host') || headersList.get('host') || ''
-  const proto = headersList.get('x-forwarded-proto') || 'https'
+  const host = headersList.get('x-forwarded-host') || headersList.get('host') || 'localhost:3000'
+  const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1')
+  const proto = headersList.get('x-forwarded-proto') || (isLocalhost ? 'http' : 'https')
   
-  // Never use localhost -- if we detect it, don't set a redirectTo at all
-  // and let Supabase use its configured Site URL
-  if (host.includes('localhost') || host.includes('127.0.0.1')) {
-    return ''
-  }
-
   return `${proto}://${host}`
 }
 

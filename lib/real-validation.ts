@@ -197,19 +197,22 @@ export async function validateInvoiceXml(
     console.error('[validation] ion-docval failed:', (err as Error).message)
   }
 
-  // ── ion-docval unreachable — return error phase ───────────────────────────
-  const errorPhase: ValidationPhase = {
+  // ── ion-docval unreachable — return warning phase (don't block save) ───────
+  const warningPhase: ValidationPhase = {
     name: 'Validacia nedostupna',
-    description: 'Validacny server ion-docval je momentalne nedostupny. Skuste to neskor.',
+    description: 'Validacny server nie je nastaveny. Facturu je mozne ulozit, ale odoslanie cez Peppol bude blokovat.',
     results: [{
       rule: 'VALIDATOR-OFFLINE',
-      severity: 'error',
-      message: 'Nepodarilo sa pripojit k validacnemu serveru. Skontrolujte pripojenie a skuste znova.',
-      passed: false,
+      severity: 'warning',
+      message: `Validacny server nie je dostupny (${ION_DOCVAL_URL}). Aby ste mohli fakturu odoslat cez Peppol, nakonfigurujte Peppol SAPI v .env.local:
+- PEPPOL_VALIDATOR_API_URL=https://app.efaktura.devop.sk/sapi/document/validate
+- PEPPOL_CLIENT_ID=<your_client_id>
+- PEPPOL_CLIENT_SECRET=<your_client_secret>`,
+      passed: true, // Don't block saving
       source: 'api' as const,
     }],
-    passed: false,
+    passed: true, // Allow save even without validator
   }
 
-  return [structPhase, errorPhase]
+  return [structPhase, warningPhase]
 }

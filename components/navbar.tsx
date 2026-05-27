@@ -8,7 +8,7 @@ import { useTheme } from '@/lib/theme-provider'
 import {
   FileText, Plus, LogOut, Building2,
   ChevronDown, Contact, Sun, Moon, ReceiptText, X, Check,
-  ArrowLeftRight, Sparkles,
+  ArrowLeftRight, Sparkles, Package,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useState, useRef, useEffect } from 'react'
@@ -20,6 +20,7 @@ const tabs = [
   { href: '/invoices/new', label: 'Nová', icon: Plus },
   { href: '/suppliers', label: 'Firmy', icon: Building2 },
   { href: '/buyers', label: 'Odberatelia', icon: Contact },
+  { href: '/items', label: 'Položky', icon: Package },
 ]
 
 export function Navbar() {

@@ -221,45 +221,68 @@ export function StepBuyer({ formData, updateForm, supplierId, supplierIco, invoi
   }
 
   async function lookupBuyer() {
-  const sanitized = buyerIco.replace(/\s/g, '')
-  setBuyerIco(sanitized)
-  if (!sanitized || sanitized.length < 6) {
-  toast.error('Zadajte platné IČO')
-  return
-  }
-  setLookingUp(true)
-  try {
-  const res = await fetch(`/api/rpo?ico=${sanitized}`)
-      const data = await res.json()
-      if (res.ok) {
-        const peppolId = data.dic ? `${PEPPOL_IDENTIFIER_SCHEME}:${data.dic}` : null
-        updateForm({
-          buyer_ico: data.ico,
-          buyer_name: data.company_name || formData.buyer_name,
-          buyer_dic: data.dic,
-          buyer_ic_dph: data.ic_dph,
-          buyer_street: data.street,
-          buyer_city: data.city,
-          buyer_postal_code: data.postal_code,
-          buyer_peppol_id: peppolId,
-        })
+    const sanitized = buyerIco.trim()
+    if (!sanitized || sanitized.length < 2) {
+      toast.error('Zadajte IČO alebo názov')
+      return
+    }
 
-        // Auto-save to buyer_contacts silently
-        autoSaveBuyer({
-          ico: data.ico,
-          company_name: data.company_name,
-          dic: data.dic,
-          ic_dph: data.ic_dph,
-          street: data.street,
-          city: data.city,
-          postal_code: data.postal_code,
-          country_code: 'SK',
-          peppol_id: peppolId,
-        })
+    setLookingUp(true)
+    try {
+      // Check if input is numeric (looks like IČO)
+      const isNumeric = /^\d+$/.test(sanitized)
 
-        toast.success(`Udaje ${partyLabel} nacitane`)
+      if (isNumeric && sanitized.length >= 6) {
+        // Search by IČO in RPO registry
+        const res = await fetch(`/api/rpo?ico=${sanitized}`)
+        const data = await res.json()
+        if (res.ok) {
+          const peppolId = data.dic ? `${PEPPOL_IDENTIFIER_SCHEME}:${data.dic}` : null
+          updateForm({
+            buyer_ico: data.ico,
+            buyer_name: data.company_name || formData.buyer_name,
+            buyer_dic: data.dic,
+            buyer_ic_dph: data.ic_dph,
+            buyer_street: data.street,
+            buyer_city: data.city,
+            buyer_postal_code: data.postal_code,
+            buyer_peppol_id: peppolId,
+          })
+
+          // Auto-save to buyer_contacts silently
+          autoSaveBuyer({
+            ico: data.ico,
+            company_name: data.company_name,
+            dic: data.dic,
+            ic_dph: data.ic_dph,
+            street: data.street,
+            city: data.city,
+            postal_code: data.postal_code,
+            country_code: 'SK',
+            peppol_id: peppolId,
+          })
+
+          toast.success(`Udaje ${partyLabel} nacitane`)
+        } else {
+          toast.error(data.error || 'Nepodarilo sa nacitat')
+        }
       } else {
-        toast.error(data.error || 'Nepodarilo sa nacitat')
+        // Search by name in saved contacts
+        const matches = contacts.filter((c) =>
+          c.company_name.toLowerCase().includes(sanitized.toLowerCase()) ||
+          (c.ico && c.ico.includes(sanitized))
+        )
+
+        if (matches.length === 0) {
+          toast.error(`Nie sú žiadni ${partyLabel} so zadaným názvom alebo IČO`)
+        } else if (matches.length === 1) {
+          // Auto-select if only one match
+          selectContact(matches[0])
+          toast.success('Vybrané z uložených')
+        } else {
+          // Show matches in a selection toast
+          toast.info(`Nájdené ${matches.length} zhod. Klikni na zoznam napravo`)
+        }
       }
     } catch {
       toast.error('Chyba pri komunikacii')
@@ -273,168 +296,172 @@ export function StepBuyer({ formData, updateForm, supplierId, supplierIco, invoi
   const restContacts = contacts.filter((c) => !frequentIcos.has(c.ico))
 
   return (
-    <div className="space-y-4">
-      {/* Top 5 Frequent Buyers */}
-      {frequentBuyers.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2.5">
-            <Star className="w-4 h-4 text-primary" />
-            <span className="text-sm font-medium text-foreground">{isSelfBilling ? 'Častí dodávatelia' : 'Častí odberatelia'}</span>
+    <div className="grid lg:grid-cols-3 gap-4">
+      {/* Main form section - takes 2 columns on desktop */}
+      <div className="lg:col-span-2 space-y-4">
+        {/* ICO Lookup */}
+        <GlassCard>
+          <div className="flex items-center gap-3 mb-3">
+            <Search className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-semibold text-foreground">Vyhľadať {partyLabel}</h2>
           </div>
-          <div className="grid gap-2">
-            {frequentBuyers.map((b) => {
-              const isSelected = formData.buyer_ico === b.ico && formData.buyer_name === b.company_name
-              return (
-                <button
-                  key={b.id}
-                  onClick={() => selectContact(b)}
-                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-sm transition-colors flex items-center gap-3 ${
-                    isSelected
-                      ? 'bg-primary/15 border border-primary/30'
-                      : 'glass-input hover:bg-secondary'
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-foreground truncate">{b.company_name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      IČO: {b.ico}
-                      <span className="ml-2 text-muted-foreground/60">{b.invoice_count}x</span>
-                    </div>
-                  </div>
-                  {isSelected && <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />}
-                </button>
-              )
-            })}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={buyerIco}
+              onChange={(e) => setBuyerIco(e.target.value)}
+              placeholder={`IČO alebo názov ${partyLabel}`}
+              className="glass-input flex-1 px-3.5 py-2.5 rounded-xl text-foreground placeholder:text-muted-foreground text-sm"
+            />
+            <button
+              onClick={lookupBuyer}
+              disabled={lookingUp}
+              className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
+            >
+              {lookingUp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Hľadať
+            </button>
           </div>
-        </div>
-      )}
+          <p className="text-xs text-muted-foreground mt-2">Zadajte IČO (6+ cifier) alebo názov {partyLabel}</p>
+        </GlassCard>
 
-      {/* Remaining contacts (expandable) */}
-      {restContacts.length > 0 && (
-        <div>
-          <button
-            onClick={() => setShowAllContacts(!showAllContacts)}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Contact className="w-4 h-4" />
-            <span>{showAllContacts ? 'Skryť ostatných' : `Zobraziť všetkých (${restContacts.length})`}</span>
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAllContacts ? 'rotate-180' : ''}`} />
-          </button>
-          {showAllContacts && (
-            <div className="grid gap-1.5 mt-2">
-              {restContacts.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => selectContact(c)}
-                  className="w-full text-left px-3.5 py-2 rounded-xl glass-input hover:bg-secondary transition-colors text-sm"
-                >
-                  <div className="font-medium text-foreground truncate">{c.company_name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {c.ico && `IČO: ${c.ico}`}
-                    {c.city && ` | ${c.city}`}
-                  </div>
-                </button>
-              ))}
+        {/* Buyer Details */}
+        <GlassCard>
+          <div className="flex items-center gap-3 mb-4">
+            <Building2 className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-semibold text-foreground">Údaje odberateľa</h2>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="md:col-span-2">
+              <label className="block text-xs text-muted-foreground mb-1">Názov firmy *</label>
+              <input id="buyer_name" type="text" value={formData.buyer_name}
+                onChange={(e) => updateForm({ buyer_name: e.target.value })}
+                className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${fieldClass('buyer_name', validationErrors, shakeFields)}`} placeholder="Názov odberateľa" />
             </div>
-          )}
-        </div>
-      )}
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">IČO</label>
+              <input type="text" value={formData.buyer_ico || ''}
+                onChange={(e) => updateForm({ buyer_ico: e.target.value.replace(/\s/g, '') })}
+                onBlur={(e) => { const v = e.target.value.replace(/\s/g, ''); if (v !== e.target.value) updateForm({ buyer_ico: v }) }}
+                className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">DIČ</label>
+              <input id="buyer_dic" type="text" value={formData.buyer_dic || ''}
+                onChange={(e) => updateForm({ buyer_dic: e.target.value })}
+                className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">IČ DPH</label>
+              <input type="text" value={formData.buyer_ic_dph || ''}
+                onChange={(e) => updateForm({ buyer_ic_dph: e.target.value })}
+                className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
+              {!formData.buyer_ic_dph && formData.buyer_country_code && formData.buyer_country_code !== 'SK' && (
+                <p className="text-xs text-amber-500 mt-1">Pre EU odberateľa odporúčame vyplniť IČ DPH</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">E-mail</label>
+              <input type="email" value={formData.buyer_email || ''}
+                onChange={(e) => updateForm({ buyer_email: e.target.value })}
+                className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Ulica *</label>
+              <input type="text" value={formData.buyer_street || ''}
+                onChange={(e) => updateForm({ buyer_street: e.target.value })}
+                className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_street') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Mesto *</label>
+              <input type="text" value={formData.buyer_city || ''}
+                onChange={(e) => updateForm({ buyer_city: e.target.value })}
+                className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_city') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">PSČ *</label>
+              <input type="text" value={formData.buyer_postal_code || ''}
+                onChange={(e) => updateForm({ buyer_postal_code: e.target.value })}
+                className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_postal_code') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Krajina *</label>
+              <input id="buyer_country_code" type="text" value={formData.buyer_country_code}
+                onChange={(e) => updateForm({ buyer_country_code: e.target.value })}
+                className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_country_code') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} maxLength={2} />
+            </div>
+          </div>
+        </GlassCard>
+      </div>
 
-      {/* ICO Lookup */}
-      <GlassCard>
-        <div className="flex items-center gap-3 mb-3">
-          <Search className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">Vyhľadať podľa IČO</h2>
-        </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={buyerIco}
-            onChange={(e) => setBuyerIco(e.target.value)}
-            placeholder={`IČO ${partyLabel}`}
-            className="glass-input flex-1 px-3.5 py-2.5 rounded-xl text-foreground placeholder:text-muted-foreground text-sm"
-            maxLength={10}
-          />
-          <button
-            onClick={lookupBuyer}
-            disabled={lookingUp}
-            className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
-          >
-            {lookingUp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-            Hľadať
-          </button>
-        </div>
-      </GlassCard>
+      {/* Sidebar - Contacts section - takes 1 column on desktop */}
+      <div className="lg:col-span-1 space-y-3">
+        {/* Top 5 Frequent Buyers */}
+        {frequentBuyers.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2.5">
+              <Star className="w-4 h-4 text-primary" />
+              <span className="text-sm font-medium text-foreground">{isSelfBilling ? 'Čast. dodáv.' : 'Čast. odberat.'}</span>
+            </div>
+            <div className="grid gap-2">
+              {frequentBuyers.map((b) => {
+                const isSelected = formData.buyer_ico === b.ico && formData.buyer_name === b.company_name
+                return (
+                  <button
+                    key={b.id}
+                    onClick={() => selectContact(b)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors flex items-center gap-2 ${
+                      isSelected
+                        ? 'bg-primary/15 border border-primary/30'
+                        : 'glass-input hover:bg-secondary'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-foreground truncate text-xs">{b.company_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {b.ico}
+                        <span className="ml-1 text-muted-foreground/60">({b.invoice_count})</span>
+                      </div>
+                    </div>
+                    {isSelected && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
-      {/* Buyer Details */}
-      <GlassCard>
-        <div className="flex items-center gap-3 mb-4">
-          <Building2 className="w-4 h-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">Údaje odberateľa</h2>
-        </div>
-        <div className="grid md:grid-cols-2 gap-3">
-          <div className="md:col-span-2">
-            <label className="block text-xs text-muted-foreground mb-1">Názov firmy *</label>
-            <input id="buyer_name" type="text" value={formData.buyer_name}
-              onChange={(e) => updateForm({ buyer_name: e.target.value })}
-              className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${fieldClass('buyer_name', validationErrors, shakeFields)}`} placeholder="Názov odberateľa" />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">IČO</label>
-            <input type="text" value={formData.buyer_ico || ''}
-              onChange={(e) => updateForm({ buyer_ico: e.target.value.replace(/\s/g, '') })}
-              onBlur={(e) => { const v = e.target.value.replace(/\s/g, ''); if (v !== e.target.value) updateForm({ buyer_ico: v }) }}
-              className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">DIČ</label>
-            <input id="buyer_dic" type="text" value={formData.buyer_dic || ''}
-              onChange={(e) => updateForm({ buyer_dic: e.target.value })}
-              className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">IČ DPH</label>
-            <input type="text" value={formData.buyer_ic_dph || ''}
-              onChange={(e) => updateForm({ buyer_ic_dph: e.target.value })}
-              className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
-            {!formData.buyer_ic_dph && formData.buyer_country_code && formData.buyer_country_code !== 'SK' && (
-              <p className="text-xs text-amber-500 mt-1">Pre EU odberateľa odporúčame vyplniť IČ DPH</p>
+        {/* Remaining contacts (expandable) */}
+        {restContacts.length > 0 && (
+          <div className="glass-card rounded-xl p-3">
+            <button
+              onClick={() => setShowAllContacts(!showAllContacts)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+            >
+              <Contact className="w-3.5 h-3.5" />
+              <span className="truncate">{showAllContacts ? 'Skryť' : `Ostatní (${restContacts.length})`}</span>
+              <ChevronDown className={`w-3 h-3 transition-transform shrink-0 ${showAllContacts ? 'rotate-180' : ''}`} />
+            </button>
+            {showAllContacts && (
+              <div className="grid gap-1 mt-2 max-h-64 overflow-y-auto">
+                {restContacts.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => selectContact(c)}
+                    className="w-full text-left px-2 py-1.5 rounded-lg glass-input hover:bg-secondary transition-colors text-xs"
+                  >
+                    <div className="font-medium text-foreground truncate">{c.company_name}</div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {c.ico && `IČO: ${c.ico}`}
+                      {c.city && ` • ${c.city}`}
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">E-mail</label>
-            <input type="email" value={formData.buyer_email || ''}
-              onChange={(e) => updateForm({ buyer_email: e.target.value })}
-              className="glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Ulica *</label>
-            <input type="text" value={formData.buyer_street || ''}
-              onChange={(e) => updateForm({ buyer_street: e.target.value })}
-              className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_street') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Mesto *</label>
-            <input type="text" value={formData.buyer_city || ''}
-              onChange={(e) => updateForm({ buyer_city: e.target.value })}
-              className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_city') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">PSČ *</label>
-            <input type="text" value={formData.buyer_postal_code || ''}
-              onChange={(e) => updateForm({ buyer_postal_code: e.target.value })}
-              className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_postal_code') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} />
-          </div>
-          <div>
-            <label className="block text-xs text-muted-foreground mb-1">Krajina *</label>
-            <input id="buyer_country_code" type="text" value={formData.buyer_country_code}
-              onChange={(e) => updateForm({ buyer_country_code: e.target.value })}
-              className={`glass-input w-full px-3.5 py-2.5 rounded-xl text-foreground text-sm ${validationErrors?.has('buyer_country_code') ? `ring-1 ring-destructive/50 ${shakeFields ? 'animate-shake' : ''}` : ''}`} maxLength={2} />
-          </div>
-        </div>
-      </GlassCard>
-
-
+        )}
+      </div>
     </div>
   )
 }

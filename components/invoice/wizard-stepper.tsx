@@ -4,27 +4,30 @@ import { cn } from '@/lib/utils'
 interface Props {
   steps: string[]
   currentStep: number
+  onStepClick?: (step: number) => void
 }
 
-export function InvoiceWizardStepper({ steps, currentStep }: Props) {
+export function InvoiceWizardStepper({ steps, currentStep, onStepClick }: Props) {
   return (
     <div className="glass-card rounded-2xl p-4">
       <div className="flex items-center gap-2">
         {steps.map((label, i) => (
           <div key={label} className="flex items-center flex-1">
             <div className="flex items-center gap-2 flex-1">
-              <div
+              <button
+                onClick={() => onStepClick?.(i)}
                 className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium shrink-0 transition-colors',
                   i < currentStep
-                    ? 'bg-success text-success-foreground'
+                    ? 'bg-success text-success-foreground hover:opacity-80'
                     : i === currentStep
                     ? 'bg-primary text-primary-foreground'
-                    : 'bg-secondary text-muted-foreground'
+                    : 'bg-secondary text-muted-foreground hover:opacity-80',
+                  onStepClick ? 'cursor-pointer' : ''
                 )}
               >
                 {i < currentStep ? <Check className="w-4 h-4" /> : i + 1}
-              </div>
+              </button>
               <span
                 className={cn(
                   'text-sm hidden sm:block',
